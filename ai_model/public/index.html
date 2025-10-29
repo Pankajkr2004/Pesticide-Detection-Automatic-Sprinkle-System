@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>🌾 Tungro Detection System</title>
+  
+  <!-- Firebase SDK -->
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-storage-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+  
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 20px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+    }
+    .container {
+      background: rgba(255,255,255,0.1);
+      padding: 30px;
+      border-radius: 15px;
+      backdrop-filter: blur(10px);
+    }
+    .upload-area {
+      border: 3px dashed #fff;
+      border-radius: 10px;
+      padding: 40px;
+      text-align: center;
+      margin: 20px 0;
+      cursor: pointer;
+      transition: all 0.3s ease;
+    }
+    .upload-area:hover {
+      background: rgba(255,255,255,0.1);
+    }
+    .btn {
+      background: #4CAF50;
+      color: white;
+      padding: 12px 24px;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      font-size: 16px;
+      margin: 10px;
+      transition: all 0.3s ease;
+    }
+    .btn:hover {
+      background: #45a049;
+      transform: translateY(-2px);
+    }
+    .btn:disabled {
+      background: #cccccc;
+      cursor: not-allowed;
+      transform: none;
+    }
+    .results {
+      margin-top: 30px;
+      padding: 20px;
+      background: rgba(0,0,0,0.2);
+      border-radius: 10px;
+      display: none;
+    }
+    .status {
+      padding: 10px;
+      border-radius: 5px;
+      margin: 10px 0;
+      text-align: center;
+      font-weight: bold;
+    }
+    .status.processing {
+      background: #2196F3;
+    }
+    .status.completed {
+      background: #4CAF50;
+    }
+    .status.failed {
+      background: #f44336;
+    }
+    .tungro-detected {
+      background: #ff4444 !important;
+      color: white;
+      animation: pulse 2s infinite;
+    }
+    .healthy-detected {
+      background: #44ff44 !important;
+      color: #333;
+    }
+    @keyframes pulse {
+      0% { opacity: 1; }
+      50% { opacity: 0.7; }
+      100% { opacity: 1; }
+    }
+    .metric {
+      display: flex;
+      justify-content: space-between;
+      margin: 5px 0;
+      padding: 5px;
+      background: rgba(0,0,0,0.1);
+      border-radius: 3px;
+    }
+    .preview-image {
+      max-width: 100%;
+      max-height: 300px;
+      border-radius: 10px;
+      margin: 10px 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🌾 Tungro Detection System</h1>
+    <p>Upload a rice plant image to detect Tungro disease automatically</p>
+    
+    <div class="upload-area" onclick="document.getElementById('imageUpload').click()">
+      <h3>📁 Click to Select Rice Plant Image</h3>
+      <p>Supports: JPG, PNG, WEBP</p>
+      <input type="file" id="imageUpload" accept="image/*" style="display: none;" onchange="handleFileSelect(event)">
+    </div>
+    
+    <div id="selectedImage" style="display: none;">
+      <h4>Selected Image:</h4>
+      <img id="previewImage" class="preview-image" />
+      <br>
+      <button class="btn" onclick="uploadAndAnalyze()" id="analyzeBtn">
+        🔍 Analyze for Tungro Disease
+      </button>
+    </div>
+    
+    <div id="results" class="results">
+      <div id="status" class="status"></div>
+      <div id="resultContent"></div>
+    </div>
+  </div>
+
+  <script>
+    // Firebase Configuration - REPLACE WITH YOUR CONFIG
+    const firebaseConfig = {
+      // 🚨 IMPORTANT: Replace this with your actual Firebase config
+      // Get this from Firebase Console → Project Settings → Your apps → Config
+      apiKey: "AIzaSyA0OTozQGKn0lrcxbtVNejhaOGA1iYciKw",
+      authDomain: "tungro-detection.firebaseapp.com",
+      projectId: "tungro-detection",
+      storageBucket: "tungro-detection.firebasestorage.app",
+      messagingSenderId: "847876742437",
+      appId: "1:847876742437:web:341bb07c6ebe075a484ecc"
+    };
+    
+    // Initialize Firebase
+    firebase.initializeApp(firebaseConfig);
+    const storage = firebase.storage();
+    const firestore = firebase.firestore();
+    
+    let selectedFile = null;
+    let currentImageId = null;
+    
+    function handleFileSelect(event) {
+      const file = event.target.files[0];
+      if (file) {
+        selectedFile = file;
+        
+        // Show preview
+        const reader = new FileReader();
+        reader.onload = function(e) {
+          document.getElementById('previewImage').src = e.target.result;
+          document.getElementById('selectedImage').style.display = 'block';
+        };
+        reader.readAsDataURL(file);
+        
+        // Hide previous results
+        document.getElementById('results').style.display = 'none';
+      }
+    }
+    
+    async function uploadAndAnalyze() {
+      if (!selectedFile) {
+        alert('Please select an image first!');
+        return;
+      }
+      
+      // Disable button during upload
+      const analyzeBtn = document.getElementById('analyzeBtn');
+      analyzeBtn.disabled = true;
+      analyzeBtn.textContent = '⬆️ Uploading...';
+      
+      try {
+        // Generate unique filename
+        const timestamp = Date.now();
+        const filename = `rice_plant_${timestamp}.${selectedFile.name.split('.').pop()}`;
+        currentImageId = `rice_plant_${timestamp}`;
+        
+        // Upload to Firebase Storage uploads/ folder
+        const ref = storage.ref(`uploads/${filename}`);
+        
+        // Show upload progress
+        showStatus('Uploading image...', 'processing');
+        
+        const uploadTask = ref.put(selectedFile);
+        
+        uploadTask.on('state_changed', 
+          (snapshot) => {
+            const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+            showStatus(`Uploading: ${Math.round(progress)}%`, 'processing');
+          },
+          (error) => {
+            console.error('Upload error:', error);
+            showStatus('Upload failed: ' + error.message, 'failed');
+            analyzeBtn.disabled = false;
+            analyzeBtn.textContent = '🔍 Analyze for Tungro Disease';
+          },
+          () => {
+            // Upload completed successfully
+            showStatus('Upload complete! Starting AI analysis...', 'processing');
+            analyzeBtn.disabled = false;
+            analyzeBtn.textContent = '🔍 Analyze for Tungro Disease';
+            
+            // Start listening for results
+            listenForResults(currentImageId);
+          }
+        );
+        
+      } catch (error) {
+        console.error('Error:', error);
+        showStatus('Error: ' + error.message, 'failed');
+        analyzeBtn.disabled = false;
+        analyzeBtn.textContent = '🔍 Analyze for Tungro Disease';
+      }
+    }
+    
+    function listenForResults(imageId) {
+      console.log('Listening for results:', imageId);
+      
+      // Listen to Firestore for real-time updates
+      firestore.collection('tungro_results').doc(imageId)
+        .onSnapshot((doc) => {
+          if (doc.exists) {
+            const result = doc.data();
+            console.log('Result received:', result);
+            displayResults(result);
+          }
+        }, (error) => {
+          console.error('Error listening for results:', error);
+          showStatus('Error getting results: ' + error.message, 'failed');
+        });
+    }
+    
+    function displayResults(result) {
+      const status = result.status;
+      
+      if (status === 'processing') {
+        showStatus('🔄 AI is analyzing your image...', 'processing');
+      } else if (status === 'completed') {
+        showStatus('✅ Analysis Complete!', 'completed');
+        showDetailedResults(result);
+      } else if (status === 'failed') {
+        showStatus('❌ Analysis Failed: ' + (result.error || 'Unknown error'), 'failed');
+      }
+    }
+    
+    function showDetailedResults(result) {
+      const prediction = result.prediction;
+      const confidence = result.confidence;
+      const yellowAnalysis = result.yellowAnalysis;
+      
+      // Main result
+      const resultClass = prediction === 'tungro' ? 'tungro-detected' : 'healthy-detected';
+      const icon = prediction === 'tungro' ? '🚨' : '✅';
+      const predictionText = prediction.toUpperCase();
+      
+      showStatus(`${icon} ${predictionText} DETECTED - ${confidence}% Confidence`, resultClass);
+      
+      // Detailed analysis
+      let detailsHtml = `
+        <h3>📊 Detailed Analysis</h3>
+        <div class="metric">
+          <span>🎯 Prediction:</span>
+          <span><strong>${predictionText}</strong></span>
+        </div>
+        <div class="metric">
+          <span>📈 Confidence:</span>
+          <span><strong>${confidence}%</strong></span>
+        </div>
+        <div class="metric">
+          <span>🟡 Yellow Area:</span>
+          <span>${yellowAnalysis.yellow_area_percentage.toFixed(1)}% of plant</span>
+        </div>
+        <div class="metric">
+          <span>💪 Intensity Score:</span>
+          <span>${yellowAnalysis.yellow_intensity_score.toFixed(3)}</span>
+        </div>
+        <div class="metric">
+          <span>⚖️ Severity:</span>
+          <span>${yellowAnalysis.severity.toUpperCase()}</span>
+        </div>
+        <div class="metric">
+          <span>🔢 Yellow Pixels:</span>
+          <span>${yellowAnalysis.yellow_pixels_total.toLocaleString()}</span>
+        </div>
+        <div class="metric">
+          <span>🌱 Total Plant Pixels:</span>
+          <span>${yellowAnalysis.total_plant_pixels.toLocaleString()}</span>
+        </div>
+      `;
+      
+      // Recommendations
+      if (prediction === 'tungro') {
+        detailsHtml += `
+          <h3>🚨 Recommendations</h3>
+          <div style="background: rgba(255,0,0,0.2); padding: 15px; border-radius: 5px; margin: 10px 0;">
+            <strong>⚠️ TUNGRO DISEASE DETECTED!</strong><br><br>
+            <strong>Immediate Actions Required:</strong><br>
+            • Isolate affected plants immediately<br>
+            • Apply appropriate fungicide treatment<br>
+            • Remove severely infected plants<br>
+            • Monitor surrounding plants closely<br>
+            • Consult with agricultural specialist<br><br>
+            <strong>Severity Level:</strong> ${yellowAnalysis.severity.toUpperCase()}
+          </div>
+        `;
+      } else {
+        detailsHtml += `
+          <h3>✅ Recommendations</h3>
+          <div style="background: rgba(0,255,0,0.2); padding: 15px; border-radius: 5px; margin: 10px 0;">
+            <strong>🎉 PLANT APPEARS HEALTHY!</strong><br><br>
+            <strong>Preventive Measures:</strong><br>
+            • Continue regular monitoring<br>
+            • Maintain proper field hygiene<br>
+            • Control insect vectors<br>
+            • Ensure proper nutrition<br>
+            • Monitor weather conditions
+          </div>
+        `;
+      }
+      
+      // Show highlighted image if available
+      if (result.highlightedImagePath) {
+        const imageUrl = `https://firebasestorage.googleapis.com/v0/b/${firebaseConfig.storageBucket}/o/${encodeURIComponent(result.highlightedImagePath)}?alt=media`;
+        detailsHtml += `
+          <h3>🖼️ Analysis Visualization</h3>
+          <img src="${imageUrl}" class="preview-image" alt="Highlighted Analysis" style="border: 2px solid #fff;">
+          <p><small>Yellow areas indicate potential Tungro symptoms</small></p>
+        `;
+      }
+      
+      document.getElementById('resultContent').innerHTML = detailsHtml;
+    }
+    
+    function showStatus(message, type) {
+      const statusDiv = document.getElementById('status');
+      const resultsDiv = document.getElementById('results');
+      
+      statusDiv.textContent = message;
+      statusDiv.className = `status ${type}`;
+      resultsDiv.style.display = 'block';
+    }
+    
+    // Test Firebase connection on load
+    window.addEventListener('load', () => {
+      console.log('🌾 Tungro Detection System Loaded');
+      console.log('Firebase Config:', firebaseConfig);
+      
+      // Test Firestore connection
+      firestore.enableNetwork().then(() => {
+        console.log('✅ Connected to Firebase');
+      }).catch(error => {
+        console.error('❌ Firebase connection error:', error);
+        alert('Error connecting to Firebase. Please check your configuration.');
+      });
+    });
+  </script>
+</body>
+</html>
